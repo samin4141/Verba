@@ -1,159 +1,186 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, UploadFile, File, Request
 from typing import List, Optional
-from pydantic import BaseModel
-import openai
-import azure.cognitiveservices.speech as speechsdk
-import os
-import json
-from ..database import get_db
-from ..models import User, ProgressRecord
+from datetime import datetime
+from pydub import AudioSegment
 
-router = APIRouter()
+from services.speech_service import SpeechService
+from services.llm_service import LLMService
+from models.speaking import SpeakingSession, SpeakingResponse, Message
+from database import get_db
+from sqlalchemy.orm import Session
+from auth import get_current_user
 
-class SpeakingPrompt(BaseModel):
-    topic: str
-    difficulty_level: int
-    format: str  # "conversation" or "test"
+router = APIRouter(
+    tags=["speaking"]
+)
 
-class SpeakingFeedback(BaseModel):
-    pronunciation_score: float
-    fluency_score: float
-    grammar_score: float
-    vocabulary_score: float
-    overall_score: float
-    feedback: List[str]
-    corrections: List[dict]
+# Initialize services
+speech_service = SpeechService()
+llm_service = LLMService()
 
-@router.post("/generate-prompt")
-async def generate_speaking_prompt(prompt_request: SpeakingPrompt):
-    openai.api_key = os.getenv("OPENAI_API_KEY")
-    
-    system_prompt = f"""Generate a speaking prompt for an English learner at level {prompt_request.difficulty_level}/30.
-    Format: {prompt_request.format}
-    Topic: {prompt_request.topic}
-    
-    Include:
-    1. Main discussion points
-    2. Useful vocabulary
-    3. Expected response structure
-    4. Follow-up questions"""
-    
-    response = await openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": "Generate a speaking prompt"}
-        ]
-    )
-    
-    return json.loads(response.choices[0].message.content)
-
-@router.post("/analyze-speech")
-async def analyze_speech(
-    audio: UploadFile = File(...),
-    db: Session = Depends(get_db)
+@router.websocket("/ws/{session_id}")
+async def websocket_endpoint(
+    websocket: WebSocket,
+    session_id: str,
+    current_user: dict = Depends(get_current_user)
 ):
-    # Save audio file temporarily
-    audio_path = f"temp_{audio.filename}"
-    with open(audio_path, "wb") as f:
-        f.write(await audio.read())
+    """WebSocket endpoint for real-time speech recognition"""
+    await websocket.accept()
     
     try:
-        # Transcribe using Whisper API
-        with open(audio_path, "rb") as audio_file:
-            transcript = await openai.Audio.transcribe("whisper-1", audio_file)
+        # Function to handle recognized speech
+        async def on_recognized(text: str):
+            await websocket.send_json({"type": "recognition", "text": text})
         
-        # Analyze pronunciation and fluency using Azure Speech Services
-        speech_config = speechsdk.SpeechConfig(
-            subscription=os.getenv("AZURE_SPEECH_KEY"),
-            region=os.getenv("AZURE_SPEECH_REGION")
-        )
-        
-        audio_config = speechsdk.AudioConfig(filename=audio_path)
-        speech_recognizer = speechsdk.SpeechRecognizer(
-            speech_config=speech_config,
-            audio_config=audio_config
-        )
-        
-        # Get detailed assessment using GPT
-        assessment = await openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": """Analyze the following English speech transcript and provide detailed feedback on:
-                1. Pronunciation
-                2. Grammar
-                3. Vocabulary usage
-                4. Fluency
-                5. Overall coherence
+        while True:
+            data = await websocket.receive_json()
+            
+            if data["action"] == "start_recording":
+                success = await speech_service.start_continuous_recognition(on_recognized)
+                await websocket.send_json({
+                    "type": "status",
+                    "success": success,
+                    "message": "Recording started" if success else "Failed to start recording"
+                })
                 
-                Provide scores (0-1) for each aspect and specific corrections/improvements."""},
-                {"role": "user", "content": transcript["text"]}
-            ]
-        )
-        
-        feedback_data = json.loads(assessment.choices[0].message.content)
-        
-        # Store progress record
-        progress_record = ProgressRecord(
-            user_id=1,  # Replace with actual user ID from auth
-            activity_type="speaking",
-            score=feedback_data["overall_score"],
-            metadata={
-                "transcript": transcript["text"],
-                "feedback": feedback_data
-            }
-        )
-        db.add(progress_record)
-        db.commit()
-        
-        return SpeakingFeedback(**feedback_data)
+            elif data["action"] == "stop_recording":
+                success = await speech_service.stop_continuous_recognition()
+                await websocket.send_json({
+                    "type": "status",
+                    "success": success,
+                    "message": "Recording stopped" if success else "Failed to stop recording"
+                })
+                
+            elif data["action"] == "process_speech":
+                # Process the accumulated speech and get AI response
+                text = data.get("text", "")
+                if not text:
+                    continue
+                
+                # Get AI response
+                ai_response = await llm_service.get_response(
+                    text,
+                    data.get("conversation_history", []),
+                    llm_service.get_speaking_prompt()
+                )
+                
+                # Synthesize and send response
+                speech_success = await speech_service.synthesize_speech(ai_response)
+                
+                await websocket.send_json({
+                    "type": "ai_response",
+                    "text": ai_response,
+                    "success": speech_success
+                })
     
-    finally:
-        # Clean up temporary file
-        if os.path.exists(audio_path):
-            os.remove(audio_path)
+    except Exception as e:
+        await websocket.close()
+        raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/chat")
-async def chat_with_ai(
-    message: str,
-    context: Optional[List[dict]] = None
+@router.post("/start", response_model=SpeakingSession)
+async def start_speaking_session(
+    topic: Optional[str] = None,
+    difficulty: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
 ):
-    """Real-time chat with AI conversation partner"""
-    openai.api_key = os.getenv("OPENAI_API_KEY")
-    
-    conversation = context or []
-    conversation.append({"role": "user", "content": message})
-    
-    response = await openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
-        messages=[
-            {"role": "system", "content": """You are a helpful English conversation partner.
-            Engage in natural conversation while:
-            1. Gently correcting grammar mistakes
-            2. Suggesting better vocabulary when appropriate
-            3. Maintaining conversation flow
-            4. Asking follow-up questions
-            5. Providing cultural context when relevant"""},
-            *conversation
-        ]
-    )
-    
-    return {
-        "response": response.choices[0].message.content,
-        "corrections": extract_corrections(message, response.choices[0].message.content)
-    }
+    """Start a new speaking practice session"""
+    try:
+        session = SpeakingSession(
+            user_id=current_user["id"],
+            topic=topic,
+            difficulty_level=difficulty
+        )
+        
+        # Add welcome message from AI
+        welcome_msg = await llm_service.get_response(
+            "Let's start our English conversation practice.",
+            [],
+            llm_service.get_speaking_prompt()
+        )
+        
+        session.conversation_history.append(
+            Message(role="assistant", content=welcome_msg)
+        )
+        
+        # Store session in database
+        # TODO: Implement database storage
+        
+        # Synthesize welcome message
+        await speech_service.synthesize_speech(welcome_msg)
+        
+        return session
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-def extract_corrections(original: str, response: str) -> List[dict]:
-    """Extract grammar and vocabulary corrections from the AI response"""
-    # This is a simplified version - you might want to use more sophisticated NLP
-    corrections = []
-    if "*" in response:
-        correction_parts = response.split("*")
-        for i in range(1, len(correction_parts), 2):
-            corrections.append({
-                "original": correction_parts[i-1].strip(),
-                "correction": correction_parts[i].strip(),
-                "type": "grammar/vocabulary"
-            })
-    return corrections 
+@router.post("/{session_id}/end")
+async def end_speaking_session(
+    session_id: str,
+    conversation_history: List[dict],
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """End the speaking session and get final feedback"""
+    try:
+        # Get final feedback from AI
+        feedback_prompt = "Please provide feedback on the student's English speaking skills based on our conversation. Include strengths and areas for improvement."
+        feedback = await llm_service.get_response(
+            feedback_prompt,
+            conversation_history,
+            llm_service.get_speaking_prompt()
+        )
+        
+        # Store feedback in database
+        # TODO: Implement database storage
+        
+        # Synthesize feedback
+        await speech_service.synthesize_speech(feedback)
+        
+        return {
+            "message": "Session ended",
+            "feedback": feedback
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/transcribe")
+async def transcribe_audio(audio: UploadFile = File(...)):
+    contents = await audio.read()
+    temp_path = "temp_audio.webm"
+    wav_path = "temp_audio.wav"
+    with open(temp_path, "wb") as f:
+        f.write(contents)
+    # Convert webm to wav
+    try:
+        sound = AudioSegment.from_file(temp_path)
+        sound.export(wav_path, format="wav")
+        text, success = await speech_service.recognize_speech_from_file(wav_path)
+    except Exception as e:
+        print(f"Audio conversion error: {e}")
+        return {"text": "", "success": False}
+    return {"text": text, "success": success}
+
+@router.post("/grade_and_respond")
+async def grade_and_respond(request: Request):
+    data = await request.json()
+    message = data.get('message', '')
+    history = data.get('history', [])
+    # 1. Get LLM response
+    ai_response = await llm_service.get_response(
+        message,
+        history,
+        llm_service.get_speaking_prompt()
+    )
+    # 2. Grade the user's message (mock grading for now)
+    feedback = {
+        'pronunciation': 98,
+        'grammar': 93,
+        'vocabulary': 78,
+        'fluency': 88,
+        'suggestions': [
+            'Try to speak with more confidence',
+            'Consider using more advanced vocabulary'
+        ]
+    }
+    # 3. Return both
+    return { 'response': ai_response, 'feedback': feedback } 
