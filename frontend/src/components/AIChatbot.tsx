@@ -42,6 +42,7 @@ const AIChatbot = ({ userLevel }: AIChatbotProps) => {
 
   const startRecording = async () => {
     setError('');
+    console.log('Starting audio recording...');
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mediaRecorder = new MediaRecorder(stream);
@@ -61,40 +62,51 @@ const AIChatbot = ({ userLevel }: AIChatbotProps) => {
         const formData = new FormData();
         formData.append('audio', audioBlob);
         try {
+          console.log('Sending audio to backend...');
           const response = await fetch('http://localhost:8000/api/speaking/transcribe', {
             method: 'POST',
             body: formData,
           });
           const data = await response.json();
+          console.log('Transcription response:', data);
           if (data.success) {
             setRecordedText(data.text);
             setMessages(prev => [...prev, { role: 'user', text: data.text }]);
             setIsProcessing(true);
             try {
+              console.log('Sending message to grade_and_respond:', data.text, messages);
               const resp = await fetch('http://localhost:8000/api/speaking/grade_and_respond', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ message: data.text, history: messages }),
               });
               const result = await resp.json();
+              console.log('AI response:', result);
               setMessages(prev => [...prev, { role: 'ai', text: result.response, feedback: result.feedback }]);
               setSessionStats(result.feedback);
             } catch (err) {
               setError('Error getting AI response.');
+              console.error('Error getting AI response:', err);
             }
             setIsProcessing(false);
           } else {
             setError('Could not transcribe audio.');
+            console.error('Transcription failed:', data);
+            setIsProcessing(false);
           }
         } catch (err) {
           setError('Error contacting backend.');
+          console.error('Error contacting backend:', err);
+          setIsProcessing(false);
         }
       };
 
       mediaRecorder.start();
       setIsRecording(true);
+      console.log('MediaRecorder started.');
     } catch (err) {
       alert('Microphone access denied or not available.');
+      console.error('Microphone access error:', err);
     }
   };
 
@@ -103,6 +115,7 @@ const AIChatbot = ({ userLevel }: AIChatbotProps) => {
       setIsProcessing(true);
       mediaRecorderRef.current.stop();
       setIsRecording(false);
+      console.log('Stopped recording.');
     }
   };
 
