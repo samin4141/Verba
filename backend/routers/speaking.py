@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, WebSocket, UploadFile, Fi
 from typing import List, Optional
 from datetime import datetime
 from pydub import AudioSegment
+import json
 
 from services.speech_service import SpeechService
 from services.llm_service import LLMService
@@ -145,16 +146,21 @@ async def end_speaking_session(
 
 @router.post("/transcribe")
 async def transcribe_audio(audio: UploadFile = File(...)):
+    print("/transcribe endpoint called")
     contents = await audio.read()
     temp_path = "temp_audio.webm"
     wav_path = "temp_audio.wav"
     with open(temp_path, "wb") as f:
         f.write(contents)
+    print(f"Audio file saved to {temp_path}")
     # Convert webm to wav
     try:
+        print("Converting audio to wav format...")
         sound = AudioSegment.from_file(temp_path)
         sound.export(wav_path, format="wav")
+        print(f"Audio converted to {wav_path}")
         text, success = await speech_service.recognize_speech_from_file(wav_path)
+        print("Transcription result:", text, success)
     except Exception as e:
         print(f"Audio conversion error: {e}")
         return {"text": "", "success": False}
@@ -162,25 +168,52 @@ async def transcribe_audio(audio: UploadFile = File(...)):
 
 @router.post("/grade_and_respond")
 async def grade_and_respond(request: Request):
+    print("/grade_and_respond endpoint called")
     data = await request.json()
     message = data.get('message', '')
     history = data.get('history', [])
-    # 1. Get LLM response
-    ai_response = await llm_service.get_response(
-        message,
-        history,
-        llm_service.get_speaking_prompt()
+    print("Received message:", message)
+    print("Received history:", history)
+
+    # 1. Get LLM response (as before)
+    try:
+        ai_response = await llm_service.get_response(
+            message,
+            history,
+            llm_service.get_speaking_prompt()
+        )
+        print("AI conversation response:", ai_response)
+    except Exception as e:
+        print("Error getting AI response:", e)
+        return { 'response': '', 'feedback': {'error': str(e)} }
+
+    # 2. Grade the user's message using Cohere LLM
+    grading_prompt = (
+        "You are an IELTS speaking examiner. "
+        "Grade the following response. "
+        "Return a JSON object with keys: grammar, vocabulary, fluency (all out of 9), "
+        "and suggestions (a list of 2-3 suggestions for improvement). "
+        f"Response: \"{message}\""
     )
-    # 2. Grade the user's message (mock grading for now)
-    feedback = {
-        'pronunciation': 98,
-        'grammar': 93,
-        'vocabulary': 78,
-        'fluency': 88,
-        'suggestions': [
-            'Try to speak with more confidence',
-            'Consider using more advanced vocabulary'
-        ]
-    }
-    # 3. Return both
+    print("Grading prompt:", grading_prompt)
+    try:
+        grading_response = await llm_service.get_response(
+            grading_prompt,
+            [],
+            None  # No system prompt needed for grading
+        )
+        print("LLM grading response:", grading_response)
+    except Exception as e:
+        print("Error getting grading response:", e)
+        return { 'response': ai_response, 'feedback': {'error': str(e)} }
+
+    # 3. Parse the grading_response as JSON
+    try:
+        feedback = json.loads(grading_response)
+        print("Parsed feedback:", feedback)
+    except Exception as e:
+        print("Error parsing grading response as JSON:", e)
+        feedback = {"raw_feedback": grading_response, "error": str(e)}
+
+    # 4. Return both
     return { 'response': ai_response, 'feedback': feedback } 
