@@ -15,7 +15,8 @@ Verba is a comprehensive English learning platform that uses AI to provide perso
 
 - **Backend**: FastAPI, SQLAlchemy, PostgreSQL
 - **AI Services**:
-  - OpenAI GPT-3.5 for content generation and evaluation
+  - Cohere Free Tier LLM for content generation and evaluation
   - Azure Speech Services for pronunciation analysis
   - Whisper API for speech-to-text
-  - YouTube Data API for content curation
+ 
+# Under Construction (free tiers of some APIs ended so not usable at the moment)
