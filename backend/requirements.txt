@@ -5,5 +5,8 @@ azure-cognitiveservices-speech==1.31.0
 python-dotenv==1.0.0
 pydantic>=2.0.0
 requests==2.31.0
-cohere==4.37 
 pydub
+aiohttp>=3.8.0
+sqlalchemy>=2.0.0
+google-api-python-client
+yt-dlp

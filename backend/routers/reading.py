@@ -2,12 +2,38 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from pydantic import BaseModel
-import openai
 import os
 from ..database import get_db
 from ..models import User, ProgressRecord
+import aiohttp
+import json
+import re
 
 router = APIRouter()
+
+# Ollama configuration
+OLLAMA_URL = os.getenv('OLLAMA_URL', 'http://localhost:11434')
+OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'llama3.2')
+
+async def call_ollama(messages: List[dict]) -> str:
+    """Helper function to call Ollama API"""
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            f"{OLLAMA_URL}/api/chat",
+            json={
+                "model": OLLAMA_MODEL,
+                "messages": messages,
+                "stream": False,
+                "options": {"temperature": 0.7}
+            },
+            timeout=aiohttp.ClientTimeout(total=120)
+        ) as response:
+            if response.status == 200:
+                result = await response.json()
+                return result['message']['content']
+            else:
+                error_data = await response.text()
+                raise ValueError(f"Ollama API request failed: {error_data}")
 
 class ReadingPassage(BaseModel):
     title: str
@@ -25,8 +51,6 @@ async def generate_reading_passage(
     topic: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
-    openai.api_key = os.getenv("OPENAI_API_KEY")
-    
     # Generate a reading passage based on user's level
     system_prompt = f"""Generate an English reading passage suitable for level {level}/30 (30 being highest).
     The passage should be challenging but comprehensible for this level.
@@ -40,20 +64,30 @@ async def generate_reading_passage(
     Format the response as a JSON object with:
     - title
     - content
-    - questions (array of question objects with type, text, and answers)"""
+    - questions (array of question objects with type, text, and answers)
+    
+    Return ONLY valid JSON, no additional text."""
     
     topic_context = f" The topic should be about {topic}." if topic else ""
     
-    response = await openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"Generate a passage{topic_context}"}
-        ]
-    )
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": f"Generate a passage{topic_context}"}
+    ]
+    
+    response = await call_ollama(messages)
     
     # Parse and return the generated passage
-    passage_data = eval(response.choices[0].message.content)
+    try:
+        passage_data = json.loads(response)
+    except:
+        # If JSON parsing fails, return a default structure
+        passage_data = {
+            "title": "Reading Passage",
+            "content": response,
+            "questions": [],
+            "level": level
+        }
     return ReadingPassage(**passage_data)
 
 @router.post("/evaluate")
@@ -61,22 +95,28 @@ async def evaluate_reading_response(
     response: ReadingResponse,
     db: Session = Depends(get_db)
 ):
-    openai.api_key = os.getenv("OPENAI_API_KEY")
-    
     # Evaluate each answer
     total_score = 0
     feedback = []
     
     for answer in response.answers:
-        evaluation = await openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "You are an English reading assessment expert. Evaluate the answer and provide a score (0-1) and constructive feedback."},
-                {"role": "user", "content": f"Question: {answer['question']}\nStudent's Answer: {answer['answer']}"}
-            ]
-        )
+        messages = [
+            {"role": "system", "content": "You are an English reading assessment expert. Evaluate the answer and provide a score (0-1) and constructive feedback. Return as JSON with keys: score (float) and feedback (string). Return ONLY valid JSON, no additional text."},
+            {"role": "user", "content": f"Question: {answer['question']}\nStudent's Answer: {answer['answer']}"}
+        ]
         
-        result = eval(evaluation.choices[0].message.content)
+        evaluation = await call_ollama(messages)
+        
+        try:
+            result = json.loads(evaluation)
+        except:
+            # If JSON parsing fails, try to extract score and use raw feedback
+            score_match = re.search(r'"score":\s*(0\.\d+|1\.0|0|1)', evaluation)
+            result = {
+                "score": float(score_match.group(1)) if score_match else 0.5,
+                "feedback": evaluation
+            }
+        
         total_score += result["score"]
         feedback.append(result["feedback"])
     

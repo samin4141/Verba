@@ -17,7 +17,8 @@ load_dotenv()
 
 async def main():
     print("Initializing Speaking Bot...")
-    print("Make sure you have set up your .env file with AZURE_SPEECH_KEY, AZURE_SPEECH_REGION, and COHERE_API_KEY")
+    print("Make sure you have set up your .env file with AZURE_SPEECH_KEY and AZURE_SPEECH_REGION")
+    print("Also ensure Ollama is running with: ollama serve")
     
     # Initialize services
     try:

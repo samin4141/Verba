@@ -1,15 +1,7 @@
 import os
 from dotenv import load_dotenv
 import azure.cognitiveservices.speech as speechsdk
-import cohere
-from cohere.errors import (
-    BadRequestError,
-    UnauthorizedError,
-    ForbiddenError,
-    NotFoundError,
-    TooManyRequestsError,
-    ServiceUnavailableError
-)
+import requests
 import time
 
 # Load environment variables
@@ -21,78 +13,74 @@ speech_config = speechsdk.SpeechConfig(
     region=os.getenv("AZURE_SPEECH_REGION")
 )
 
+# Ollama configuration
+OLLAMA_URL = os.getenv('OLLAMA_URL', 'http://localhost:11434')
+OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'llama3.2')
+
 def get_ai_response(prompt: str, conversation_history: list) -> str:
-    """Get response using Cohere's API"""
+    """Get response using Ollama's local API"""
     
-    # Get and verify token with debug info
-    api_key = os.getenv('COHERE_API_KEY')
-    print("\nDebug: Checking Cohere API key configuration...")
-    
-    if not api_key:
-        print("Error: COHERE_API_KEY not found in .env file!")
-        return "Configuration error. Please check the console for details."
+    print("\nDebug: Connecting to Ollama...")
     
     try:
-        # Initialize Cohere client
-        co = cohere.Client(api_key)
+        # Format conversation history for Ollama
+        messages = []
+        for msg in conversation_history:
+            messages.append({
+                "role": msg["role"],
+                "content": msg["content"]
+            })
         
-        # Format conversation history for Cohere
-        formatted_history = []
-        for msg in conversation_history[:-1]:  # Exclude the latest message
-            role = "User" if msg["role"] == "user" else "Chatbot"
-            formatted_history.append({"role": role, "message": msg["content"]})
-        
-        # Generate response using Cohere
-        response = co.chat(
-            message=prompt,
-            chat_history=formatted_history,
-            model="command",  # You can change this to other models like "command-light" or "command-nightly"
-            temperature=0.7,
+        # Generate response using Ollama
+        response = requests.post(
+            f"{OLLAMA_URL}/api/chat",
+            json={
+                "model": OLLAMA_MODEL,
+                "messages": messages,
+                "stream": False,
+                "options": {
+                    "temperature": 0.7,
+                }
+            },
+            timeout=120
         )
         
-        return response.text
+        if response.status_code == 200:
+            result = response.json()
+            return result['message']['content']
+        else:
+            print(f"\nError: Ollama API returned status {response.status_code}")
+            return "There was an error connecting to Ollama. Make sure it's running."
             
-    except UnauthorizedError:
-        print("\nError: Invalid API key")
-        print("Please make sure your Cohere API key is valid")
-        return "Authentication error. Please check your API key."
-    except BadRequestError as e:
-        print(f"\nError: Bad request - {e}")
-        print("This might be due to invalid input format or model parameters")
-        return "There was an error with the request format. Please try again."
-    except TooManyRequestsError:
-        print("\nError: Rate limit exceeded")
-        print("You have exceeded the rate limit for API calls")
-        return "Too many requests. Please wait a moment and try again."
-    except ServiceUnavailableError:
-        print("\nError: Service is currently unavailable")
-        print("The Cohere API service might be experiencing issues")
-        return "Service temporarily unavailable. Please try again later."
-    except (ForbiddenError, NotFoundError) as e:
-        print(f"\nError accessing API: {e}")
-        return "There was an error accessing the AI service. Please try again later."
+    except requests.exceptions.ConnectionError:
+        print("\nError: Could not connect to Ollama")
+        print("Make sure Ollama is running with: ollama serve")
+        return "Could not connect to Ollama. Please make sure Ollama is running."
+    except requests.exceptions.Timeout:
+        print("\nError: Request to Ollama timed out")
+        return "Request timed out. The model might be processing a large request."
     except Exception as e:
         print(f"\nUnexpected error: {e}")
         return "I apologize, but I'm having trouble processing your request."
 
 def simulate_conversation():
-    # Check .env file first
-    if not os.path.exists('.env'):
-        print("\nError: .env file not found!")
-        print("Please create a .env file in the backend directory with your Cohere API key:")
-        print('COHERE_API_KEY=your-api-key-here')
-        return
-        
-    api_key = os.getenv('COHERE_API_KEY')
-    if not api_key:
-        print("\nError: COHERE_API_KEY not found in .env file!")
-        print("Please add your Cohere API key to the .env file:")
-        print('COHERE_API_KEY=your-api-key-here')
+    # Check if Ollama is running
+    try:
+        response = requests.get(f"{OLLAMA_URL}/api/version", timeout=5)
+        if response.status_code != 200:
+            print("\nError: Could not connect to Ollama!")
+            print("Please make sure Ollama is running with: ollama serve")
+            return
+    except:
+        print("\nError: Could not connect to Ollama!")
+        print("Please make sure Ollama is running with: ollama serve")
+        print(f"Expected Ollama at: {OLLAMA_URL}")
         return
         
     print("\nStarting conversation test...")
     print("Speak when you see 'Listening...'. Press Ctrl+C to exit.")
-    print("\nNote: First response might take 20 seconds as the model loads...")
+    print(f"\nUsing Ollama model: {OLLAMA_MODEL}")
+    print("Note: First response might take a moment as the model loads...")
     
     # Configure speech recognizer
     speech_recognizer = speechsdk.SpeechRecognizer(speech_config=speech_config)
@@ -116,7 +104,7 @@ def simulate_conversation():
                 # Add user message to history
                 conversation_history.append({"role": "user", "content": user_message})
                 
-                # Get AI response using Cohere
+                # Get AI response using Ollama
                 response = get_ai_response(user_message, conversation_history)
                 print(f"\nAI: {response}")
                 
@@ -145,13 +133,13 @@ def simulate_conversation():
             print(f"{role}: {message['content']}")
 
 if __name__ == "__main__":
-    print("Verba Speaking Test (Cohere Version)")
+    print("Verba Speaking Test (Ollama Version)")
     print("===================================")
-    print("This will test the conversation flow using Cohere's API:")
+    print("This will test the conversation flow using Ollama:")
     print("1. Speech-to-text (Azure)")
-    print("2. AI processing (Cohere - Testing Connection)")
+    print("2. AI processing (Ollama - Local)")
     print("3. Text-to-speech (Azure)")
-    print("\nMake sure your microphone is connected!")
+    print("\nMake sure your microphone is connected and Ollama is running!")
     
     # Run the conversation
     simulate_conversation() 

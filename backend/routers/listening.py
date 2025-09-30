@@ -2,14 +2,40 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from pydantic import BaseModel
-import openai
 import os
 from googleapiclient.discovery import build
 import yt_dlp
 from ..database import get_db
 from ..models import User, ProgressRecord
+import aiohttp
+import json
+import re
 
 router = APIRouter()
+
+# Ollama configuration
+OLLAMA_URL = os.getenv('OLLAMA_URL', 'http://localhost:11434')
+OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'llama3.2')
+
+async def call_ollama(messages: List[dict]) -> str:
+    """Helper function to call Ollama API"""
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            f"{OLLAMA_URL}/api/chat",
+            json={
+                "model": OLLAMA_MODEL,
+                "messages": messages,
+                "stream": False,
+                "options": {"temperature": 0.7}
+            },
+            timeout=aiohttp.ClientTimeout(total=120)
+        ) as response:
+            if response.status == 200:
+                result = await response.json()
+                return result['message']['content']
+            else:
+                error_data = await response.text()
+                raise ValueError(f"Ollama API request failed: {error_data}")
 
 class ListeningContent(BaseModel):
     title: str
@@ -106,28 +132,26 @@ async def get_transcript(video_id: str):
 @router.post("/generate-questions")
 async def generate_questions(transcript: str, level: int):
     """Generate questions based on the transcript"""
-    openai.api_key = os.getenv("OPENAI_API_KEY")
+    messages = [
+        {"role": "system", "content": f"""Generate 5 listening comprehension questions for level {level}/30 based on the transcript.
+        Include a mix of:
+        1. Main idea questions
+        2. Detail questions
+        3. Inference questions
+        4. Vocabulary questions
+        
+        Format as JSON with:
+        - question_text
+        - type (multiple_choice/short_answer)
+        - options (for multiple choice)
+        - correct_answer
+        
+        Return ONLY valid JSON, no additional text."""},
+        {"role": "user", "content": transcript}
+    ]
     
-    response = await openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
-        messages=[
-            {"role": "system", "content": f"""Generate 5 listening comprehension questions for level {level}/30 based on the transcript.
-            Include a mix of:
-            1. Main idea questions
-            2. Detail questions
-            3. Inference questions
-            4. Vocabulary questions
-            
-            Format as JSON with:
-            - question_text
-            - type (multiple_choice/short_answer)
-            - options (for multiple choice)
-            - correct_answer"""},
-            {"role": "user", "content": transcript}
-        ]
-    )
-    
-    return response.choices[0].message.content
+    response = await call_ollama(messages)
+    return response
 
 @router.post("/evaluate")
 async def evaluate_listening_response(
@@ -135,21 +159,27 @@ async def evaluate_listening_response(
     db: Session = Depends(get_db)
 ):
     """Evaluate user's answers to listening questions"""
-    openai.api_key = os.getenv("OPENAI_API_KEY")
-    
     total_score = 0
     feedback = []
     
     for answer in response.answers:
-        evaluation = await openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "Evaluate the answer to this listening comprehension question. Provide a score (0-1) and specific feedback."},
-                {"role": "user", "content": f"Question: {answer['question']}\nUser's Answer: {answer['answer']}\nCorrect Answer: {answer['correct_answer']}"}
-            ]
-        )
+        messages = [
+            {"role": "system", "content": "Evaluate the answer to this listening comprehension question. Provide a score (0-1) and specific feedback. Return as JSON with keys: score (float) and feedback (string). Return ONLY valid JSON, no additional text."},
+            {"role": "user", "content": f"Question: {answer['question']}\nUser's Answer: {answer['answer']}\nCorrect Answer: {answer['correct_answer']}"}
+        ]
         
-        result = eval(evaluation.choices[0].message.content)
+        evaluation = await call_ollama(messages)
+        
+        try:
+            result = json.loads(evaluation)
+        except:
+            # If JSON parsing fails, try to extract score and use raw feedback
+            score_match = re.search(r'"score":\s*(0\.\d+|1\.0|0|1)', evaluation)
+            result = {
+                "score": float(score_match.group(1)) if score_match else 0.5,
+                "feedback": evaluation
+            }
+        
         total_score += result["score"]
         feedback.append(result["feedback"])
     

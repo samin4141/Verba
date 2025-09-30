@@ -1,36 +1,25 @@
 import os
 from dotenv import load_dotenv
-import cohere
-from cohere.errors import (
-    BadRequestError,
-    UnauthorizedError,
-    ForbiddenError,
-    NotFoundError,
-    TooManyRequestsError,
-    ServiceUnavailableError
-)
 from typing import List, Dict, Optional
-import aiohttp  # Added for async HTTP requests
+import aiohttp
 import asyncio
+import json
 
 # Load environment variables
 load_dotenv()
 
 class LLMService:
     def __init__(self):
-        """Initialize LLM service with Cohere"""
-        api_key = os.getenv('COHERE_API_KEY')
-        if not api_key:
-            raise ValueError("COHERE_API_KEY not found in environment variables")
-        self.client = cohere.Client(api_key)
-        self.api_key = api_key  # Store API key for async client
+        """Initialize LLM service with Ollama"""
+        self.ollama_url = os.getenv('OLLAMA_URL', 'http://localhost:11434')
+        self.model = os.getenv('OLLAMA_MODEL', 'llama3.2')
     
     async def get_response(self, 
                           prompt: str, 
                           conversation_history: List[Dict[str, str]], 
                           system_prompt: Optional[str] = None) -> str:
         """
-        Get AI response using Cohere's chat API asynchronously
+        Get AI response using Ollama's local API asynchronously
         Args:
             prompt: The current user message
             conversation_history: List of previous messages
@@ -39,54 +28,54 @@ class LLMService:
             AI response text
         """
         try:
-            # Format conversation history for Cohere
-            formatted_history = []
-            for msg in conversation_history:
-                role = "User" if msg["role"] == "user" else "Chatbot"
-                formatted_history.append({"role": role, "message": msg["content"]})
+            # Format conversation history for Ollama
+            messages = []
             
             # Add system prompt if provided
             if system_prompt:
-                formatted_history.insert(0, {
-                    "role": "System",
-                    "message": system_prompt
+                messages.append({
+                    "role": "system",
+                    "content": system_prompt
                 })
             
-            # Since Cohere's Python client doesn't have native async support,
-            # we'll use their REST API directly with aiohttp for true async behavior
+            # Add conversation history
+            for msg in conversation_history:
+                messages.append({
+                    "role": msg["role"],
+                    "content": msg["content"]
+                })
+            
+            # Add current prompt
+            messages.append({
+                "role": "user",
+                "content": prompt
+            })
+            
+            # Call Ollama API
             async with aiohttp.ClientSession() as session:
                 async with session.post(
-                    "https://api.cohere.ai/v1/chat",
-                    headers={
-                        "Authorization": f"Bearer {self.api_key}",
-                        "Content-Type": "application/json"
-                    },
+                    f"{self.ollama_url}/api/chat",
                     json={
-                        "message": prompt,
-                        "chat_history": formatted_history,
-                        "model": "command",
-                        "temperature": 0.7,
-                    }
+                        "model": self.model,
+                        "messages": messages,
+                        "stream": False,
+                        "options": {
+                            "temperature": 0.7,
+                        }
+                    },
+                    timeout=aiohttp.ClientTimeout(total=120)
                 ) as response:
                     if response.status == 200:
                         result = await response.json()
-                        return result['text']
+                        return result['message']['content']
                     else:
-                        error_data = await response.json()
-                        raise ValueError(f"API request failed: {error_data}")
+                        error_data = await response.text()
+                        raise ValueError(f"Ollama API request failed: {error_data}")
             
         except aiohttp.ClientError as e:
-            raise ValueError(f"Network error: {e}")
-        except UnauthorizedError:
-            raise ValueError("Invalid API key. Please check your Cohere API key.")
-        except BadRequestError as e:
-            raise ValueError(f"Invalid request format: {e}")
-        except TooManyRequestsError:
-            raise ValueError("Rate limit exceeded. Please try again later.")
-        except ServiceUnavailableError:
-            raise ValueError("Cohere service is temporarily unavailable.")
-        except (ForbiddenError, NotFoundError) as e:
-            raise ValueError(f"Error accessing Cohere API: {e}")
+            raise ValueError(f"Network error connecting to Ollama: {e}. Make sure Ollama is running.")
+        except asyncio.TimeoutError:
+            raise ValueError("Request to Ollama timed out. The model might be processing a large request.")
         except Exception as e:
             raise ValueError(f"Unexpected error: {e}")
     
