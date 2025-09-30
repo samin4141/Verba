@@ -11,7 +11,6 @@ import ListeningSection from "@/components/sections/ListeningSection";
 import SpeakingSection from "@/components/sections/SpeakingSection";
 import WritingSection from "@/components/sections/WritingSection";
 import UserProfileDropdown from "@/components/UserProfileDropdown";
-import { useAuth } from "@/contexts/AuthContext";
 
 const Index = () => {
   const [currentSection, setCurrentSection] = useState<string>('dashboard');
@@ -25,8 +24,6 @@ const Index = () => {
     speaking: 15,
     writing: 16
   });
-
-  const { user } = useAuth();
 
   const sections = [
     { id: 'reading', name: 'Reading', icon: Book, color: 'from-blue-500 to-blue-600', bgColor: 'bg-gradient-to-br from-blue-50 to-blue-100 dark:from-blue-900/20 dark:to-blue-800/20', borderColor: 'border-blue-200 dark:border-blue-700' },
@@ -219,10 +216,7 @@ const Index = () => {
   );
 
   const getDisplayName = () => {
-    if (user?.user_metadata?.full_name) {
-      return user.user_metadata.full_name.split(' ')[0];
-    }
-    return user?.email?.split('@')[0] || 'there';
+    return 'there';
   };
 
   return (

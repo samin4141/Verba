@@ -8,28 +8,28 @@ from dotenv import load_dotenv
 import json
 from routers import speaking
 
-# Load environment variables
 load_dotenv()
 
 app = FastAPI(
     title="Verba - English Learning Platform",
-    description="Backend API for Verba English Learning Platform",
+    description="Backend API for Verba",
     version="1.0.0"
 )
 
-# Configure CORS
+# CORS setup - allowing everything for now
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # TODO: restrict this in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Include routers
+# add speaking routes
 app.include_router(speaking.router, prefix="/api/speaking", tags=["speaking"])
 
-# Mock User Data (keeping this for testing)
+# mock data for testing
+# TODO: replace with actual database queries
 mock_user = {
     "id": 1,
     "email": "test@example.com",
@@ -45,20 +45,20 @@ mock_user = {
 class ReadingPassageRequest(BaseModel):
     level: int
     topic: Optional[str] = None
-    length: Optional[str] = "medium"  # short, medium, long
+    length: Optional[str] = "medium"
 
-# Routes
 @app.get("/")
 async def root():
-    return {"message": "Welcome to Verba English Learning Platform API"}
+    return {"message": "Verba API"}
 
-# User Routes
+# user endpoints
 @app.get("/api/user/profile")
-async def get_user_profile():
+async def get_profile():
     return mock_user
 
 @app.get("/api/user/progress")
-async def get_user_progress():
+async def get_progress():
+    # just returning mock data for now
     return {
         "levels": {
             "reading": mock_user["reading_level"],
@@ -70,9 +70,9 @@ async def get_user_progress():
         "streak": mock_user["streak_days"]
     }
 
-# Speaking Routes
 @app.get("/api/speaking/prompt")
-async def get_speaking_prompt():
+async def get_prompt():
+    # sample speaking prompts
     return {
         "topic": "Technology in Daily Life",
         "questions": [

@@ -5,58 +5,50 @@ import aiohttp
 import asyncio
 import json
 
-# Load environment variables
+# grab env variables
 load_dotenv()
 
 class LLMService:
     def __init__(self):
-        """Initialize LLM service with Ollama"""
+        # get ollama settings from env
         self.ollama_url = os.getenv('OLLAMA_URL', 'http://localhost:11434')
-        self.model = os.getenv('OLLAMA_MODEL', 'llama3.2')
+        self.model_name = os.getenv('OLLAMA_MODEL', 'llama3.2')
     
     async def get_response(self, 
                           prompt: str, 
                           conversation_history: List[Dict[str, str]], 
                           system_prompt: Optional[str] = None) -> str:
-        """
-        Get AI response using Ollama's local API asynchronously
-        Args:
-            prompt: The current user message
-            conversation_history: List of previous messages
-            system_prompt: Optional prompt to guide the AI's behavior
-        Returns:
-            AI response text
-        """
+        # this talks to ollama and gets a response
+        # will throw errors if ollama isnt running or times out
         try:
-            # Format conversation history for Ollama
             messages = []
             
-            # Add system prompt if provided
+            # add system prompt if we got one
             if system_prompt:
                 messages.append({
                     "role": "system",
                     "content": system_prompt
                 })
             
-            # Add conversation history
+            # add conversation history
             for msg in conversation_history:
                 messages.append({
                     "role": msg["role"],
                     "content": msg["content"]
                 })
             
-            # Add current prompt
+            # add the current user message
             messages.append({
                 "role": "user",
                 "content": prompt
             })
             
-            # Call Ollama API
+            # call ollama
             async with aiohttp.ClientSession() as session:
                 async with session.post(
                     f"{self.ollama_url}/api/chat",
                     json={
-                        "model": self.model,
+                        "model": self.model_name,
                         "messages": messages,
                         "stream": False,
                         "options": {
@@ -64,23 +56,24 @@ class LLMService:
                         }
                     },
                     timeout=aiohttp.ClientTimeout(total=120)
-                ) as response:
-                    if response.status == 200:
-                        result = await response.json()
-                        return result['message']['content']
+                ) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        return data['message']['content']
                     else:
-                        error_data = await response.text()
-                        raise ValueError(f"Ollama API request failed: {error_data}")
+                        error_text = await resp.text()
+                        raise ValueError(f"ollama request failed: {error_text}")
             
         except aiohttp.ClientError as e:
-            raise ValueError(f"Network error connecting to Ollama: {e}. Make sure Ollama is running.")
+            raise ValueError(f"cant connect to ollama: {e}. is it running?")
         except asyncio.TimeoutError:
-            raise ValueError("Request to Ollama timed out. The model might be processing a large request.")
+            raise ValueError("ollama timed out. maybe try a smaller model?")
         except Exception as e:
-            raise ValueError(f"Unexpected error: {e}")
+            print(f"unexpected error in llm service: {e}")
+            raise ValueError(f"something went wrong: {e}")
     
     def get_speaking_prompt(self) -> str:
-        """Return the system prompt for speaking practice"""
+        # prompt for the speaking tutor AI
         return """You are an English speaking tutor. Your role is to:
         1. Engage in natural conversations with the student
         2. Correct any grammar or pronunciation mistakes

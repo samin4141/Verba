@@ -1,145 +1,149 @@
-# Verba Backend Setup with Ollama
+# Running the backend with Ollama
 
-This guide will help you set up the Verba backend to run completely locally using Ollama.
+So you want to run this thing locally without paying for APIs? Here's how.
 
-## Prerequisites
+## What you need
 
-1. **Install Ollama**: Download and install Ollama from [https://ollama.ai](https://ollama.ai)
-2. **Python 3.8+**: Make sure you have Python installed
+1. Ollama (grab it from https://ollama.ai)
+2. Python 3.8 or newer
 
-## Setup Instructions
+## Setup
 
-### 1. Install Ollama and Pull a Model
+### 1. Get Ollama running
 
 ```bash
-# Install Ollama (follow instructions at https://ollama.ai)
+# Install Ollama first (check their website)
 
-# Pull a recommended model (llama3.2 is a good balance of speed and quality)
+# Download a model (llama3.2 works pretty well)
 ollama pull llama3.2
 
-# Or try other models:
-# ollama pull llama3.1
-# ollama pull mistral
-# ollama pull phi3
+# Or try these if you want:
+# ollama pull mistral     (faster)
+# ollama pull phi3        (even faster, less smart)
+# ollama pull llama3.1    (smarter, slower)
 ```
 
-### 2. Start Ollama Server
+### 2. Start the Ollama server
 
 ```bash
 ollama serve
 ```
 
-This will start the Ollama server on `http://localhost:11434` (default port).
+It runs on `http://localhost:11434` by default.
 
-### 3. Install Python Dependencies
+### 3. Install Python stuff
 
 ```bash
 cd backend
 pip install -r requirements.txt
 ```
 
-### 4. Configure Environment Variables
+### 4. Make a .env file
 
-Create a `.env` file in the `backend` directory:
+Create `.env` in the backend folder:
 
 ```bash
-# Ollama Configuration (Local LLM)
+# Ollama stuff
 OLLAMA_URL=http://localhost:11434
 OLLAMA_MODEL=llama3.2
 
-# Azure Speech Services (for speech-to-text and text-to-speech)
-# Optional: You can replace this with local Whisper for STT
-AZURE_SPEECH_KEY=your_azure_speech_key_here
-AZURE_SPEECH_REGION=your_azure_region_here
+# If you have Azure Speech (optional)
+# AZURE_SPEECH_KEY=your_key
+# AZURE_SPEECH_REGION=us-east-1
 
-# YouTube API (for listening content recommendations)
-# Optional: Only needed if you want to use YouTube content recommendations
-YOUTUBE_API_KEY=your_youtube_api_key_here
+# YouTube API (optional, only for listening features)
+# YOUTUBE_API_KEY=your_key
 
-# Database Configuration
+# Database (just uses SQLite)
 DATABASE_URL=sqlite:///./verba.db
 
-# JWT Secret for Authentication
-JWT_SECRET=your_jwt_secret_here
+# Some random secret for JWT
+JWT_SECRET=change_this_to_something_random
 ```
 
-### 5. Run the Backend
+### 5. Run it
 
 ```bash
-# Initialize the database
+# Set up the database first
 python init_db.py
 
-# Start the FastAPI server
+# Start the server
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 ## Testing
 
-### Test the Speaking Bot
+Want to test if Ollama is working?
+
+```bash
+python test_ollama_connection.py
+```
+
+Or test the full speaking bot:
 
 ```bash
 python test_speaking_bot.py
 ```
 
-### Test Conversation Flow
+## Which model should I use?
 
-```bash
-python test_conversation_huggingface.py
-```
+- **llama3.2** - good default, not too slow
+- **mistral** - faster, still pretty good
+- **phi3** - super fast, but not as smart
+- **llama3.1** - best quality, but slow as hell
 
-## Recommended Ollama Models
+Just depends on your hardware tbh.
 
-- **llama3.2** (Default): Good balance of speed and quality
-- **llama3.1**: Larger model, better quality but slower
-- **mistral**: Fast and efficient
-- **phi3**: Smaller model, very fast but less capable
+## Going fully local
 
-## Optional: Local Speech-to-Text
+Still using Azure for speech recognition? You can replace it with Whisper:
 
-If you want to run everything locally without Azure Speech Services, you can:
-
-1. Install Whisper locally:
 ```bash
 pip install openai-whisper
-# or for faster inference:
+# or if you want it faster:
 pip install faster-whisper
 ```
 
-2. Update `backend/services/speech_service.py` to use local Whisper instead of Azure Speech Services.
+Then update `services/speech_service.py` to use Whisper instead. I might do this later.
 
-## Troubleshooting
+## Common problems
 
-### Ollama Connection Error
-- Make sure Ollama is running: `ollama serve`
-- Check if the model is pulled: `ollama list`
-- Verify the URL in `.env` matches your Ollama server
+**Can't connect to Ollama**
+- Is it running? Try `ollama serve`
+- Check `ollama list` to see your models
+- Make sure the URL in `.env` is right
 
-### Slow Response Times
-- Try a smaller model like `phi3` or `mistral`
-- Check your system resources (CPU/GPU usage)
-- Increase timeout in the code if needed
+**Super slow responses**
+- Try a smaller model (phi3 or mistral)
+- First request is always slow (loading the model)
+- Check your CPU/RAM usage
 
-### Model Not Found
-- Pull the model first: `ollama pull llama3.2`
-- Check available models: `ollama list`
+**Model not found**
+- Did you pull it? `ollama pull llama3.2`
+- Check what you have: `ollama list`
 
-## Performance Tips
+## Performance tips
 
-1. **Use GPU acceleration**: Ollama automatically uses GPU if available
-2. **Keep Ollama running**: First request loads the model (slow), subsequent requests are faster
-3. **Adjust temperature**: Lower temperature (0.3-0.5) for more consistent responses
-4. **Model selection**: Start with `llama3.2`, adjust based on your hardware
+- Ollama will use your GPU if you have one (makes it way faster)
+- The first request is slow because it loads the model into memory
+- After that it's pretty quick
+- Lower temperature (like 0.3) makes responses more consistent
+- Try different models until you find one that works for your machine
 
-## What's Changed from External APIs
+## What changed
 
-- ✅ **Cohere API** → Ollama (local)
-- ✅ **OpenAI GPT** → Ollama (local)
-- ⚠️ **Azure Speech Services** → Still using Azure (can be replaced with local Whisper)
-- ⚠️ **YouTube API** → Still using YouTube API (optional feature)
+Before we were using:
+- Cohere API (paid) -> now using Ollama (local, free)
+- OpenAI API (paid) -> now using Ollama (local, free)
+- Azure Speech (still using this, but can swap for Whisper)
+- YouTube API (still using for listening features)
 
-## Next Steps
+So basically everything runs locally now except voice stuff and YouTube videos.
 
-- Consider replacing Azure Speech Services with local Whisper
-- Optimize prompts for better responses with smaller models
-- Experiment with different Ollama models for your use case
+## Next steps
 
+- Probably should add local Whisper support
+- Fine-tune the prompts for smaller models
+- Maybe add some caching so it's faster
+
+That's it. Should work now.
